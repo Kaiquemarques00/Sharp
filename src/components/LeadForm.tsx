@@ -12,7 +12,7 @@ export default function LeadForm() {
     const formData = new FormData(e.currentTarget);
 
     try {
-      await fetch('https://kaiqueteste.app.n8n.cloud/webhook-test/7bae4e38-ec40-42cb-8f80-2e669811a998', {
+      await fetch('https://sharp-teste.app.n8n.cloud/webhook-test/7bae4e38-ec40-42cb-8f80-2e669811a998', {
         method: 'POST',
         body: formData
       });
