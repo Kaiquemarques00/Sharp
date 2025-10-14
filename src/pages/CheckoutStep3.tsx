@@ -60,8 +60,6 @@ export default function CheckoutStep3({ planId, billingCycle }: CheckoutStep3Pro
         .select()
         .single();
 
-      console.log(barbershopError)
-
       if (barbershopError) throw barbershopError;
 
       const { error: profileError } = await supabase
@@ -75,28 +73,37 @@ export default function CheckoutStep3({ planId, billingCycle }: CheckoutStep3Pro
 
       if (profileError) throw profileError;
 
-      const expiresAt = new Date();
-      if (billingCycle === 'mensal') {
-        expiresAt.setMonth(expiresAt.getMonth() + 1);
-      } else {
-        expiresAt.setFullYear(expiresAt.getFullYear() + 1);
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) throw new Error('Sessão não encontrada');
+
+      const response = await fetch(
+        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/create-payment`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${session.access_token}`,
+          },
+          body: JSON.stringify({
+            planId,
+            billingCycle,
+            price,
+            userId: checkoutData.userId,
+            email: checkoutData.email,
+            fullName: checkoutData.fullName,
+          }),
+        }
+      );
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Erro ao criar pagamento');
       }
 
-      const { error: subscriptionError } = await supabase
-        .from('subscriptions')
-        .insert({
-          barbershop_id: barbershop.id,
-          plan_type: planId,
-          billing_cycle: billingCycle,
-          price: price,
-          status: 'active',
-          expires_at: expiresAt.toISOString()
-        });
-
-      if (subscriptionError) throw subscriptionError;
+      const { initPoint } = await response.json();
 
       sessionStorage.removeItem('checkoutData');
-      navigate('/success');
+      window.location.href = initPoint;
     } catch (err: any) {
       setError(err.message || 'Erro ao processar pagamento. Tente novamente.');
     } finally {
