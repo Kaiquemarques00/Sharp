@@ -1,10 +1,17 @@
 import { useEffect, useState } from 'react';
 import { useLocation } from './hooks/useNavigate';
 import LandingPage from './pages/LandingPage';
+import Login from './pages/Login';
+import Signup from './pages/Signup';
+import Dashboard from './pages/Dashboard';
+import DashboardPlans from './pages/DashboardPlans';
 import CheckoutStep1 from './pages/CheckoutStep1';
 import CheckoutStep2 from './pages/CheckoutStep2';
 import CheckoutStep3 from './pages/CheckoutStep3';
 import Success from './pages/Success';
+import PaymentSuccess from './pages/PaymentSuccess';
+import PaymentFailure from './pages/PaymentFailure';
+import PaymentPending from './pages/PaymentPending';
 import { PlanType, BillingCycle } from './types/plans';
 
 function App() {
@@ -22,9 +29,14 @@ function App() {
 
   const path = location.pathname;
 
-  if (path === '/success') {
-    return <Success />;
-  }
+  if (path === '/login') return <Login />;
+  if (path === '/signup') return <Signup />;
+  if (path === '/dashboard') return <Dashboard />;
+  if (path === '/dashboard/plans') return <DashboardPlans />;
+  if (path === '/success') return <Success />;
+  if (path === '/payment/success') return <PaymentSuccess />;
+  if (path === '/payment/failure') return <PaymentFailure />;
+  if (path === '/payment/pending') return <PaymentPending />;
 
   const checkoutMatch = path.match(/^\/checkout\/([^/]+)\/([^/]+)$/);
   if (checkoutMatch) {
