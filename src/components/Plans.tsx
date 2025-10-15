@@ -1,14 +1,34 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Check, Sparkles } from 'lucide-react';
 import { plans, BillingCycle } from '../types/plans';
 import { useNavigate } from '../hooks/useNavigate';
+import { createClient } from '@supabase/supabase-js';
+
+const supabase = createClient(
+  import.meta.env.VITE_SUPABASE_URL,
+  import.meta.env.VITE_SUPABASE_ANON_KEY
+);
 
 export default function Plans() {
   const [billingCycle, setBillingCycle] = useState<BillingCycle>('mensal');
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
   const navigate = useNavigate();
 
+  useEffect(() => {
+    checkAuth();
+  }, []);
+
+  const checkAuth = async () => {
+    const { data: { session } } = await supabase.auth.getSession();
+    setIsAuthenticated(!!session);
+  };
+
   const handleSelectPlan = (planId: string) => {
-    navigate(`/checkout/${planId}/${billingCycle}`);
+    if (isAuthenticated) {
+      navigate(`/checkout/step2/${planId}/${billingCycle}`);
+    } else {
+      navigate(`/checkout/${planId}/${billingCycle}`);
+    }
   };
 
   return (

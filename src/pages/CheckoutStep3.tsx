@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { ArrowLeft, Scissors, Lock, CreditCard } from 'lucide-react';
+import { ArrowLeft, Scissors, Lock, ExternalLink, AlertTriangle } from 'lucide-react';
 import { plans, PlanType, BillingCycle } from '../types/plans';
 import { useNavigate } from '../hooks/useNavigate';
 import { createClient } from '@supabase/supabase-js';
@@ -9,6 +9,35 @@ const supabase = createClient(
   import.meta.env.VITE_SUPABASE_ANON_KEY
 );
 
+// Mapa de IDs de Planos de Assinatura do Mercado Pago (Preapproval Plan IDs)
+// IMPORTANTE: VOCÊ DEVE SUBSTITUIR ESTES PLACEHOLDERS PELOS SEUS IDs REAIS!
+const MERCADO_PAGO_IDS: Record<PlanType, Record<BillingCycle, string>> = {
+  essencial: {
+    mensal: 'MENSAL_ID_ESSENCIAL', 
+    anual: 'ANUAL_ID_ESSENCIAL',
+  },
+  profissional: {
+    mensal: 'MENSAL_ID_PROFISSIONAL',
+    anual: 'ANUAL_ID_PROFISSIONAL',
+  },
+  premium: {
+    mensal: 'MENSAL_ID_PREMIUM',
+    // Usando o ID fornecido como exemplo para o plano mais completo
+    anual: '4f9d4003c9ee436ca62ae8d82f16c743', 
+  },
+};
+
+const getMercadoPagoLink = (planId: PlanType, billingCycle: BillingCycle): string | null => {
+  const preapprovalId = MERCADO_PAGO_IDS[planId]?.[billingCycle];
+  
+  if (!preapprovalId) {
+    console.error(`ID do plano não encontrado para: ${planId} / ${billingCycle}`);
+    return null;
+  }
+
+  return `https://www.mercadopago.com.br/subscriptions/checkout?preapproval_plan_id=${preapprovalId}`;
+};
+
 interface CheckoutStep3Props {
   planId: PlanType;
   billingCycle: BillingCycle;
@@ -16,100 +45,92 @@ interface CheckoutStep3Props {
 
 export default function CheckoutStep3({ planId, billingCycle }: CheckoutStep3Props) {
   const navigate = useNavigate();
-  const [paymentMethod, setPaymentMethod] = useState<'cartao' | 'pix' | 'boleto'>('cartao');
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
-
-  const [cardData, setCardData] = useState({
-    number: '',
-    name: '',
-    expiry: '',
-    cvv: '',
-    cpf: ''
-  });
+  const [checkoutData, setCheckoutData] = useState<any>(null);
+  const [error, setError] = useState<string | null>(null); // Novo estado para mensagens de erro
 
   const plan = plans.find(p => p.id === planId);
   const price = billingCycle === 'mensal' ? plan?.monthlyPrice : plan?.annualPrice;
   const period = billingCycle === 'mensal' ? '/mês' : '/ano';
 
   useEffect(() => {
-    const checkoutData = sessionStorage.getItem('checkoutData');
-    if (!checkoutData) {
-      navigate(`/checkout/${planId}/${billingCycle}`);
-    }
+    loadCheckoutData();
   }, [navigate, planId, billingCycle]);
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const loadCheckoutData = () => {
+    const data = sessionStorage.getItem('checkoutData');
+    if (!data) {
+      navigate(`/checkout/${planId}/${billingCycle}`);
+      return;
+    }
+    setCheckoutData(JSON.parse(data));
+  };
+
+  const handleGoToPayment = async () => {
+    setError(null); // Limpa erros anteriores
     setLoading(true);
-    setError('');
+
+    const subscriptionLink = getMercadoPagoLink(planId, billingCycle);
+
+    if (!subscriptionLink) {
+      setError('Erro: Link de assinatura não configurado. Por favor, verifique a configuração dos IDs do Mercado Pago.');
+      setLoading(false);
+      return;
+    }
 
     try {
-      const checkoutDataStr = sessionStorage.getItem('checkoutData');
-      if (!checkoutDataStr) throw new Error('Dados do checkout não encontrados');
+      // Se o usuário não tem barbershop_id, precisa criar o barbershop primeiro
+      if (!checkoutData.barbershopId) {
+        const { data: barbershop, error: barbershopError } = await supabase
+          .from('barbershops')
+          .insert({
+            name: checkoutData.barbershopName,
+            whatsapp_phone: checkoutData.whatsappPhone,
+            barber_count: checkoutData.barberCount
+          })
+          .select()
+          .single();
 
-      const checkoutData = JSON.parse(checkoutDataStr);
+        if (barbershopError) throw barbershopError;
 
-      const { data: barbershop, error: barbershopError } = await supabase
-        .from('barbershops')
-        .insert({
-          name: checkoutData.barbershopName,
-          whatsapp_phone: checkoutData.whatsappPhone,
-          barber_count: checkoutData.barberCount
-        })
-        .select()
-        .single();
-
-      if (barbershopError) throw barbershopError;
-
-      const { error: profileError } = await supabase
-        .from('profiles')
-        .insert({
-          id: checkoutData.userId,
-          full_name: checkoutData.fullName,
-          email: checkoutData.email,
-          barbershop_id: barbershop.id
-        });
-
-      if (profileError) throw profileError;
-
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) throw new Error('Sessão não encontrada');
-
-      const response = await fetch(
-        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/create-payment`,
-        {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${session.access_token}`,
-          },
-          body: JSON.stringify({
-            planId,
-            billingCycle,
-            price,
-            userId: checkoutData.userId,
+        const { error: profileError } = await supabase
+          .from('profiles')
+          .insert({
+            id: checkoutData.userId,
+            full_name: checkoutData.fullName,
             email: checkoutData.email,
-            fullName: checkoutData.fullName,
-          }),
-        }
-      );
+            barbershop_id: barbershop.id
+          });
 
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || 'Erro ao criar pagamento');
+        if (profileError) throw profileError;
       }
 
-      const { initPoint } = await response.json();
+      // Salva informações do plano selecionado para processar depois
+      sessionStorage.setItem('selectedPlan', JSON.stringify({
+        planId,
+        billingCycle,
+        price,
+        userId: checkoutData.userId,
+        barbershopId: checkoutData.barbershopId || checkoutData.userId
+      }));
 
-      sessionStorage.removeItem('checkoutData');
-      window.location.href = initPoint;
+      // Redireciona para o link do Mercado Pago dinamicamente
+      window.location.href = subscriptionLink;
     } catch (err: any) {
-      setError(err.message || 'Erro ao processar pagamento. Tente novamente.');
-    } finally {
+      console.error('Error:', err);
+      setError('Erro ao processar sua assinatura. Tente novamente ou entre em contato com o suporte.');
       setLoading(false);
     }
   };
+
+  if (!checkoutData) {
+    // Tela de carregamento simples enquanto carrega os dados
+    return (
+      <div className="min-h-screen bg-black flex items-center justify-center">
+        <p className="text-white">Carregando dados do checkout...</p>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-black py-12">
@@ -135,186 +156,101 @@ export default function CheckoutStep3({ planId, billingCycle }: CheckoutStep3Pro
               <div className="mb-8">
                 <div className="flex items-center gap-3 mb-4">
                   <div className="w-8 h-8 bg-emerald-500 rounded-full flex items-center justify-center text-white font-bold">
-                    3
+                    {checkoutData?.userId ? '2' : '3'}
                   </div>
                   <h2 className="text-2xl font-bold text-white">
                     Finalize sua Assinatura
                   </h2>
                 </div>
-                <div className="flex items-center gap-2 text-sm text-gray-500 ml-11">
-                  <div className="w-2 h-2 bg-emerald-500 rounded-full"></div>
-                  <span className="text-emerald-500">Dados da Conta</span>
-                  <div className="w-8 h-px bg-gray-600"></div>
-                  <div className="w-2 h-2 bg-emerald-500 rounded-full"></div>
-                  <span className="text-emerald-500">WhatsApp</span>
-                  <div className="w-8 h-px bg-gray-600"></div>
-                  <div className="w-2 h-2 bg-gray-600 rounded-full"></div>
-                  <span>Pagamento</span>
-                </div>
+                {!checkoutData?.barbershopId && (
+                  <div className="flex items-center gap-2 text-sm text-gray-500 ml-11">
+                    <div className="w-2 h-2 bg-emerald-500 rounded-full"></div>
+                    <span className="text-emerald-500">Dados da Conta</span>
+                    <div className="w-8 h-px bg-gray-600"></div>
+                    <div className="w-2 h-2 bg-emerald-500 rounded-full"></div>
+                    <span className="text-emerald-500">WhatsApp</span>
+                    <div className="w-8 h-px bg-gray-600"></div>
+                    <div className="w-2 h-2 bg-gray-600 rounded-full"></div>
+                    <span>Pagamento</span>
+                  </div>
+                )}
               </div>
+              
+              {/* Exibição da mensagem de erro */}
+              {error && (
+                <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-4 mb-6 flex items-start gap-3">
+                  <AlertTriangle className="w-5 h-5 text-red-400 flex-shrink-0 mt-0.5" />
+                  <p className="text-red-400 text-sm">
+                    {error}
+                  </p>
+                </div>
+              )}
 
               <div className="bg-gradient-to-r from-emerald-500/10 to-teal-500/10 border border-emerald-500/30 rounded-lg p-4 mb-8 flex items-center gap-3">
                 <Lock className="w-6 h-6 text-emerald-400 flex-shrink-0" />
                 <div>
                   <p className="text-white font-semibold">Pagamento 100% Seguro</p>
-                  <p className="text-emerald-400 text-sm">Seus dados estão criptografados.</p>
+                  <p className="text-emerald-400 text-sm">Processado pelo Mercado Pago.</p>
                 </div>
               </div>
 
-              <div className="mb-6">
-                <div className="flex gap-4 border-b border-zinc-800">
-                  <button
-                    type="button"
-                    onClick={() => setPaymentMethod('cartao')}
-                    className={`px-4 py-3 font-medium transition-colors border-b-2 ${
-                      paymentMethod === 'cartao'
-                        ? 'text-emerald-400 border-emerald-400'
-                        : 'text-gray-400 border-transparent hover:text-white'
-                    }`}
-                  >
-                    <div className="flex items-center gap-2">
-                      <CreditCard className="w-5 h-5" />
-                      Cartão de Crédito
+              <div className="space-y-6">
+                <div className="bg-zinc-900 rounded-xl p-6">
+                  <h3 className="text-lg font-semibold text-white mb-4">Informações do Pedido</h3>
+                  
+                  <div className="space-y-3 text-sm">
+                    <div className="flex justify-between">
+                      <span className="text-gray-400">Nome:</span>
+                      <span className="text-white font-medium">{checkoutData?.fullName}</span>
                     </div>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setPaymentMethod('pix')}
-                    className={`px-4 py-3 font-medium transition-colors border-b-2 ${
-                      paymentMethod === 'pix'
-                        ? 'text-emerald-400 border-emerald-400'
-                        : 'text-gray-400 border-transparent hover:text-white'
-                    }`}
-                  >
-                    PIX
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setPaymentMethod('boleto')}
-                    className={`px-4 py-3 font-medium transition-colors border-b-2 ${
-                      paymentMethod === 'boleto'
-                        ? 'text-emerald-400 border-emerald-400'
-                        : 'text-gray-400 border-transparent hover:text-white'
-                    }`}
-                  >
-                    Boleto
-                  </button>
+                    <div className="flex justify-between">
+                      <span className="text-gray-400">Email:</span>
+                      <span className="text-white font-medium">{checkoutData?.email}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-gray-400">Barbearia:</span>
+                      <span className="text-white font-medium">{checkoutData?.barbershopName}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-gray-400">WhatsApp:</span>
+                      <span className="text-white font-medium">{checkoutData?.whatsappPhone}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-gray-400">Barbeiros:</span>
+                      <span className="text-white font-medium">{checkoutData?.barberCount}</span>
+                    </div>
+                  </div>
                 </div>
-              </div>
 
-              <form onSubmit={handleSubmit} className="space-y-6">
-                {paymentMethod === 'cartao' && (
-                  <div className="space-y-4">
-                    <div>
-                      <label htmlFor="cardNumber" className="block text-sm font-medium text-gray-300 mb-2">
-                        Número do Cartão
-                      </label>
-                      <input
-                        type="text"
-                        id="cardNumber"
-                        required
-                        maxLength={19}
-                        value={cardData.number}
-                        onChange={(e) => setCardData({ ...cardData, number: e.target.value })}
-                        className="w-full px-4 py-3 bg-zinc-900 border border-zinc-700 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent"
-                        placeholder="0000 0000 0000 0000"
-                      />
-                    </div>
-
-                    <div>
-                      <label htmlFor="cardName" className="block text-sm font-medium text-gray-300 mb-2">
-                        Nome no Cartão
-                      </label>
-                      <input
-                        type="text"
-                        id="cardName"
-                        required
-                        value={cardData.name}
-                        onChange={(e) => setCardData({ ...cardData, name: e.target.value })}
-                        className="w-full px-4 py-3 bg-zinc-900 border border-zinc-700 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent"
-                        placeholder="Nome como está no cartão"
-                      />
-                    </div>
-
-                    <div className="grid grid-cols-2 gap-4">
-                      <div>
-                        <label htmlFor="expiry" className="block text-sm font-medium text-gray-300 mb-2">
-                          Validade (MM/AA)
-                        </label>
-                        <input
-                          type="text"
-                          id="expiry"
-                          required
-                          maxLength={5}
-                          value={cardData.expiry}
-                          onChange={(e) => setCardData({ ...cardData, expiry: e.target.value })}
-                          className="w-full px-4 py-3 bg-zinc-900 border border-zinc-700 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent"
-                          placeholder="MM/AA"
-                        />
-                      </div>
-
-                      <div>
-                        <label htmlFor="cvv" className="block text-sm font-medium text-gray-300 mb-2">
-                          CVV
-                        </label>
-                        <input
-                          type="text"
-                          id="cvv"
-                          required
-                          maxLength={4}
-                          value={cardData.cvv}
-                          onChange={(e) => setCardData({ ...cardData, cvv: e.target.value })}
-                          className="w-full px-4 py-3 bg-zinc-900 border border-zinc-700 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent"
-                          placeholder="123"
-                        />
-                      </div>
-                    </div>
-
-                    <div>
-                      <label htmlFor="cpf" className="block text-sm font-medium text-gray-300 mb-2">
-                        CPF/CNPJ do Titular
-                      </label>
-                      <input
-                        type="text"
-                        id="cpf"
-                        required
-                        value={cardData.cpf}
-                        onChange={(e) => setCardData({ ...cardData, cpf: e.target.value })}
-                        className="w-full px-4 py-3 bg-zinc-900 border border-zinc-700 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent"
-                        placeholder="000.000.000-00"
-                      />
-                    </div>
-                  </div>
-                )}
-
-                {paymentMethod === 'pix' && (
-                  <div className="bg-zinc-900 rounded-lg p-6 text-center">
-                    <p className="text-white mb-4">Após confirmar, você receberá o código PIX para pagamento.</p>
-                    <p className="text-gray-400 text-sm">O código será válido por 30 minutos.</p>
-                  </div>
-                )}
-
-                {paymentMethod === 'boleto' && (
-                  <div className="bg-zinc-900 rounded-lg p-6 text-center">
-                    <p className="text-white mb-4">Após confirmar, você receberá o boleto por e-mail.</p>
-                    <p className="text-gray-400 text-sm">Vencimento em 3 dias úteis.</p>
-                  </div>
-                )}
-
-                {error && (
-                  <div className="bg-red-500/10 border border-red-500/50 rounded-lg p-4">
-                    <p className="text-red-400 text-sm">{error}</p>
-                  </div>
-                )}
+                <div className="bg-blue-500/10 border border-blue-500/30 rounded-lg p-4">
+                  <p className="text-blue-400 text-sm flex items-start gap-2">
+                    <ExternalLink className="w-4 h-4 mt-0.5 flex-shrink-0" />
+                    <span>
+                      Você será redirecionado para a página de pagamento seguro do Mercado Pago. 
+                      Após a confirmação, você receberá um email e poderá acessar o dashboard.
+                    </span>
+                  </p>
+                </div>
 
                 <button
-                  type="submit"
+                  onClick={handleGoToPayment}
                   disabled={loading}
-                  className="w-full bg-gradient-to-r from-emerald-500 to-teal-500 text-white py-4 rounded-lg font-semibold text-lg hover:from-emerald-600 hover:to-teal-600 transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="w-full bg-gradient-to-r from-emerald-500 to-teal-500 text-white py-4 rounded-lg font-semibold text-lg hover:from-emerald-600 hover:to-teal-600 transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
                 >
-                  {loading ? 'Processando...' : 'Assinar e Ativar o SharpBot'}
+                  {loading ? (
+                    'Processando...'
+                  ) : (
+                    <>
+                      Ir para Pagamento Seguro
+                      <ExternalLink className="w-5 h-5" />
+                    </>
+                  )}
                 </button>
-              </form>
+
+                <p className="text-center text-gray-500 text-xs">
+                  Ao clicar, você concorda com nossos Termos de Serviço e Política de Privacidade
+                </p>
+              </div>
             </div>
           </div>
 
@@ -346,9 +282,19 @@ export default function CheckoutStep3({ planId, billingCycle }: CheckoutStep3Pro
                 </div>
               </div>
 
-              <div className="bg-emerald-500/10 border border-emerald-500/30 rounded-lg p-4">
+              <div className="bg-emerald-500/10 border border-emerald-500/30 rounded-lg p-4 mb-4">
                 <p className="text-emerald-400 text-sm">
                   7 dias grátis para testar todas as funcionalidades
+                </p>
+              </div>
+
+              <div className="bg-zinc-900 rounded-lg p-4">
+                <div className="flex items-center gap-2 mb-2">
+                  <Lock className="w-4 h-4 text-gray-400" />
+                  <span className="text-white text-sm font-semibold">Pagamento Seguro</span>
+                </div>
+                <p className="text-gray-400 text-xs">
+                  Processado pelo Mercado Pago com certificado SSL
                 </p>
               </div>
             </div>

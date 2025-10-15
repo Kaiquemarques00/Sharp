@@ -2,16 +2,33 @@ import { useState, useEffect } from 'react';
 import { ArrowLeft, Scissors } from 'lucide-react';
 import { plans, PlanType, BillingCycle } from '../types/plans';
 import { useNavigate } from '../hooks/useNavigate';
+import { createClient } from '@supabase/supabase-js';
+import clsx from 'clsx'; // Importação adicionada para facilitar a condicionalidade de classes
 
 interface CheckoutStep2Props {
   planId: PlanType;
   billingCycle: BillingCycle;
 }
 
+const supabase = createClient(
+  import.meta.env.VITE_SUPABASE_URL,
+  import.meta.env.VITE_SUPABASE_ANON_KEY
+);
+
 export default function CheckoutStep2({ planId, billingCycle }: CheckoutStep2Props) {
   const navigate = useNavigate();
   const [whatsappPhone, setWhatsappPhone] = useState('');
   const [barberCount, setBarberCount] = useState(1);
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  
+    useEffect(() => {
+      checkAuth();
+    }, []);
+  
+    const checkAuth = async () => {
+      const { data: { session } } = await supabase.auth.getSession();
+      setIsAuthenticated(!!session);
+    };
 
   const plan = plans.find(p => p.id === planId);
   const price = billingCycle === 'mensal' ? plan?.monthlyPrice : plan?.annualPrice;
@@ -37,12 +54,25 @@ export default function CheckoutStep2({ planId, billingCycle }: CheckoutStep2Pro
     navigate(`/checkout/step3/${planId}/${billingCycle}`);
   };
 
+  // Função para lidar com o clique do botão "Voltar", checando a autenticação
+  const handleGoBack = () => {
+    if (!isAuthenticated) {
+      navigate(`/checkout/${planId}/${billingCycle}`);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-black py-12">
       <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
         <button
-          onClick={() => navigate(`/checkout/${planId}/${billingCycle}`)}
-          className="flex items-center gap-2 text-gray-400 hover:text-white transition-colors mb-8"
+          onClick={handleGoBack} // Usa a função condicional
+          disabled={isAuthenticated} // Desabilita o botão no HTML
+          className={clsx( // Aplica classes condicionais
+            "flex items-center gap-2 transition-colors mb-8",
+            isAuthenticated 
+              ? "text-gray-600 cursor-not-allowed" // Estilo desabilitado
+              : "text-gray-400 hover:text-white" // Estilo habilitado
+          )}
         >
           <ArrowLeft className="w-5 h-5" />
           Voltar

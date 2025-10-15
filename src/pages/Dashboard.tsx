@@ -7,11 +7,9 @@ import {
   MessageSquare,
   TrendingUp,
   Lock,
-  Sparkles,
-  Check
+  Sparkles
 } from 'lucide-react';
 import Header from '../components/Header';
-import { plans } from '../types/plans';
 
 const supabase = createClient(
   import.meta.env.VITE_SUPABASE_URL,
